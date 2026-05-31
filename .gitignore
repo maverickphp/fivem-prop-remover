@@ -9,6 +9,11 @@ Thumbs.db
 # Logs
 *.log
 
+# Archives / build artifacts
+*.rar
+*.zip
+*.7z
+
 # Keep data/removed_props.json tracked (as an empty []), but ignore any backups
 data/*.bak
 data/*.backup
