@@ -2,10 +2,13 @@
 --  prop_remover - server.lua
 --  Permission is checked SERVER-SIDE (ESX / QBCore / ACE). The client only
 --  *asks* to remove a prop; non-admins are rejected here no matter what.
+--  v2: per-prop metadata (id / who / when), restore-by-id, update checker,
+--  simple per-source rate limiting.
 --======================================================================
 
 local removedProps = {}
-local FILE = 'data/removed_props.json'
+local nextId       = 1
+local FILE         = 'data/removed_props.json'
 
 -- ---- framework objects (loaded only for the mode you picked) ----
 local ESX, QBCore
@@ -62,14 +65,40 @@ local function isAdmin(src)
     return false
 end
 
+-- ---- simple rate limiting (defence in depth; events are already admin-gated) ----
+local lastAction = {}
+local function rateLimited(src, ms)
+    local now = GetGameTimer()
+    local last = lastAction[src] or 0
+    if now - last < (ms or 150) then return true end
+    lastAction[src] = now
+    return false
+end
+AddEventHandler('playerDropped', function()
+    lastAction[source] = nil
+end)
+
 -- ---- storage ----
 local function loadProps()
     local raw = LoadResourceFile(GetCurrentResourceName(), FILE)
+    local list = {}
     if raw and raw ~= '' then
         local ok, decoded = pcall(json.decode, raw)
-        if ok and type(decoded) == 'table' then return decoded end
+        if ok and type(decoded) == 'table' then list = decoded end
     end
-    return {}
+    -- migrate older entries (no id) + figure out nextId
+    local maxId = 0
+    for _, p in ipairs(list) do
+        if type(p.id) ~= 'number' then
+            maxId = maxId + 1
+            p.id = maxId
+        elseif p.id > maxId then
+            maxId = p.id
+        end
+        if not p.modelName then p.modelName = GetReadablePropName(p.model) end
+    end
+    nextId = maxId + 1
+    return list
 end
 
 local function persist()
@@ -84,6 +113,27 @@ AddEventHandler('onResourceStart', function(res)
     if res ~= GetCurrentResourceName() then return end
     removedProps = loadProps()
     print(('[prop_remover] Loaded %d saved removal(s). Mode: %s'):format(#removedProps, Config.PermissionMode))
+end)
+
+-- ---- update checker ----
+CreateThread(function()
+    if not Config.CheckUpdates then return end
+    PerformHttpRequest(('https://api.github.com/repos/%s/releases/latest'):format(Config.GithubRepo),
+        function(code, body)
+            if code == 200 and body then
+                local ok, data = pcall(json.decode, body)
+                if ok and data and data.tag_name then
+                    local latest = (data.tag_name:gsub('^v', ''))
+                    if latest ~= Config.Version then
+                        print(('[prop_remover] ^3Update available: %s (you have %s) -> https://github.com/%s^7')
+                            :format(latest, Config.Version, Config.GithubRepo))
+                    else
+                        print(('[prop_remover] Up to date (%s).'):format(Config.Version))
+                    end
+                end
+            end
+            -- 404 = no releases published yet; stay quiet.
+        end, 'GET', '', { ['User-Agent'] = 'prop_remover' })
 end)
 
 -- Client just loaded -> send kill list + tell it whether this player is an admin
@@ -102,6 +152,7 @@ end)
 -- Admin removed a prop in-game -> save it forever
 RegisterNetEvent('propremover:add', function(model, x, y, z)
     local src = source
+    if rateLimited(src) then return end
     if not isAdmin(src) then
         print(('[prop_remover] %s tried to remove a prop WITHOUT permission. Ignored.'):format(src))
         return
@@ -114,10 +165,38 @@ RegisterNetEvent('propremover:add', function(model, x, y, z)
         end
     end
 
-    removedProps[#removedProps + 1] = { model = model, x = x, y = y, z = z }
+    local entry = {
+        id        = nextId,
+        model     = model,
+        modelName = GetReadablePropName(model),
+        x = x, y = y, z = z,
+        by   = GetPlayerName(src) or ('id ' .. src),
+        time = os.date('%Y-%m-%d %H:%M'),
+    }
+    nextId = nextId + 1
+    removedProps[#removedProps + 1] = entry
     persist()
     syncAll()
-    print(('[prop_remover] %s saved removal of %s at %.2f, %.2f, %.2f (total: %d)'):format(src, model, x, y, z, #removedProps))
+    print(('[prop_remover] %s saved removal of %s at %.2f, %.2f, %.2f (total: %d)')
+        :format(entry.by, entry.modelName, x, y, z, #removedProps))
+end)
+
+-- Restore a single prop by id (from the management menu)
+RegisterNetEvent('propremover:restoreOne', function(id)
+    local src = source
+    if rateLimited(src) then return end
+    if not isAdmin(src) then return end
+    if type(id) ~= 'number' then return end
+    for i = 1, #removedProps do
+        if removedProps[i].id == id then
+            local p = table.remove(removedProps, i)
+            persist()
+            syncAll()
+            print(('[prop_remover] %s restored %s (remaining: %d).')
+                :format(GetPlayerName(src) or src, p.modelName or p.model, #removedProps))
+            return
+        end
+    end
 end)
 
 RegisterNetEvent('propremover:undo', function()
