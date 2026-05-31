@@ -1,0 +1,14 @@
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Keep data/removed_props.json tracked (as an empty []), but ignore any backups
+data/*.bak
+data/*.backup
