@@ -6,7 +6,7 @@
 ![FiveM](https://img.shields.io/badge/FiveM-resource-orange)
 ![Framework](https://img.shields.io/badge/framework-ESX%20%7C%20QBCore%20%7C%20Standalone-blue)
 ![ox_lib](https://img.shields.io/badge/requires-ox__lib-green)
-
+-
 ---
 
 ![Demo — removal mode active: the prop in the crosshair is red-outlined with its model shown, ready to delete](demo.png)
